@@ -1,0 +1,4 @@
+/.vscode/
+/reactapp/node_modules/
+/django/env/
+.idea

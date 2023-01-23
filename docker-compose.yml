@@ -1,0 +1,112 @@
+version: '3.8'
+# Поднимаем пять сервисов: django, node, rabbitMQ, postgres, nginx
+services:
+  django:
+    #говорим что build будет из dockerfile который располагается ./django/django_project/
+    build: ./django/django_project/
+    # имя контейнера
+    container_name: djangoapp
+    # перезапускать контейнер при завершении выполнения работы или при аварийном завершении
+    restart: always
+    # проброс портов внутрь контейнера, 8000 порт на хост машине будет проброшен внутрь контейнера на такой же 8000 порт
+    expose:
+      - 8000
+    # команда при старте контейнера
+    command: >
+      sh -c "nohup python worker.py & nohup python manage.py my_command & python manage.py runserver 0.0.0.0:8000"
+    depends_on:
+      - postgres
+      - rmq
+    # Для статики мы подключаем два volume (чтобы при перезапуске наши данные не пропадали)), создадим их ниже.
+    volumes:
+      - ./django/django_project:/usr/src/app/
+      - django_static_volume:/usr/src/app/static
+      - django_media_volume:/usr/src/app/media
+    # подключаем к сети myNetwork (в целом не обязательно, но до кучи чтоб было)
+    networks:
+      - myNetwork
+    env_file:
+      - ./.env
+
+  node:
+    # Аналогично, build из ./reactapp/dockerfile
+    build: ./reactapp
+    # имя контейнера
+    container_name: reactapp
+    # рестарт
+    restart: always
+    # порты
+    ports:
+      - 3000:3000
+    # команда при запуске
+    volumes:
+      - ./reactapp/public/:/usr/src/app/public/
+      - ./reactapp/src/:/usr/src/app/src/
+    command: npm start
+    # Зависимость. нет смысла ноде, если некому отдать ей данные. поэтому сначала стартуем сервис django, а за ней node
+    depends_on:
+      - django
+    # Сеть та же, все контейнеры должны крутиться в однйо сети чтобы видеть друг друга.
+    networks:
+      - myNetwork
+
+  rmq:
+    # на этот раз мы не билдим контейнер а используем полностью готовый из репозитория
+    image: rabbitmq:3.10-management
+    restart: always
+    container_name: rmq
+    networks:
+      - myNetwork
+    # Переменные окружения для настройки. 
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    # volume для хранения данных rmq, можно и без него, но тогда при перезапуске каждый раз будет создаваться новый и они будут потихоньку накапливаться
+    volumes:
+      - rabbitmq_data_volume:/var/lib/rabbitmq/
+    # проброс портов, 15672 для менеджмента, 5671-5672 для работы
+    ports:
+      - 1234:15672
+      - 5671-5672:5671-5672    
+  
+  # Сервис нашей БД
+  postgres:
+    # Так же разворачиваем с готового контейнера
+    image: postgres:15-alpine
+    container_name: postgresdb
+    # Чтобы наши данные не пропадали при перезапуске подключсим volume
+    volumes:
+      - postgres_volume:/var/lib/postgresql/data/
+    # Переменные окружения. их надо будет передавать в django.
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=strong_password
+      - POSTGRES_DB=django_db
+    # Сеть
+    networks:
+      - myNetwork
+  
+  nginx:
+    build: ./nginx
+    container_name: nginx
+    networks:
+      - myNetwork
+    ports:
+      - 1337:80
+    depends_on:
+      - django
+    volumes:
+      - django_static_volume:/home/src/app/static
+      - django_media_volume:/home/src/app/media 
+
+# создаём два volume для статики
+volumes:
+  postgres_volume:
+  django_static_volume:
+  django_media_volume:
+  rabbitmq_data_volume:
+
+# создаём сеть.
+networks:
+  myNetwork:
+    driver: bridge
